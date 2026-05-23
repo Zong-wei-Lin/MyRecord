@@ -1,72 +1,100 @@
-# 專案實作計劃書：輕量級高效雙軌排程調度系統 (GitHub Copilot 專用)
+# 專案實作計劃書：輕量級分散式雙軌排程調度系統 (變數設定與多 Venv 支援版)
 
 ## 👤 角色設定
-你是一位精通 Windows 核心架構、Python 併發程式設計（Concurrency）與高性能資料庫設計的資深系統架構師。請依據下方嚴格的環境限制與系統需求，協助我編寫、重構並優化全套排程管理調度腳本。
+你是一位精通 Windows 核心架構、Python 併發程式設計（Concurrency）與高性能資料庫設計的資深系統架構師。請依據下方明確的環境限制、自訂主機簡寫變數、以及動態指定 Python 虛擬環境 (venv) 的需求，協助我編寫全套排程管理調度腳本。
 
 ---
 
 ## 🛑 1. 執行環境與嚴格限制 (Environment & Constraints)
-在產出任何程式碼之前，必須無條件遵守以下環境限制，**嚴禁**使用任何不相容的語法或第三方套件：
-*   **作業系統 (OS)**: Windows Server 2008 R2 (環境極度老舊)。
-*   **記憶體 (RAM)**: 僅有 **8 GB**。資源極度受限，必須嚴防記憶體洩漏 (Memory Leak) 與瞬時記憶體炸裂 (OOM)。
-*   **Python 版本**: **Python 3.7**。嚴禁使用 Python 3.8+ 的新語法（如：海象運算子 `:=`、`asyncio.run()` 的特定新特性等）。
-*   **資安政策**: **絕對禁止下載與安裝任何外部第三方排程/管理套件**（如：`APScheduler`, `Celery`, `NSSM`, `schedule` 等）。
-*   **資料庫**: MySQL 5.8.8 (儲存於本地或區域網路)。
-*   **Web 環境**: 採用 Classic ASP 搭配現有的 FastAPI 後端。
+*   **中央伺服器 (ml350gen8)**: 託管前端網頁面板、FastAPI 後端、以及中央監控 DashBoard。
+*   **執行端主機 (A、B、C 多台主機)**: 實際存放並執行各個 Python 小程式，每台主機記憶體僅 **8 GB**。
+*   **Python 版本**: **Python 3.7**。嚴禁使用 Python 3.8+ 的新語法（如：海象運算子 `:=` 等）。
+*   **資安政策**: **絕對禁止下載與安裝任何外部第三方排程管理套件**（如：`APScheduler`, `Celery`, `NSSM` 等）。
+*   **資料庫**: MySQL 5.8.8 (位於中央環境，庫名：`log_record`)。
 
 ---
 
-## 🎯 2. 系統核心架構設計 (System Architecture)
-本系統拒絕採用「長期掛載背景」的常駐服務，改採**「每分鐘由 Windows 工作排程器喚醒 ➡️ 快閃派發 ➡️ 立即釋放退出」**的極高容錯混合機制，並具備**大/小任務雙軌分流**與**總量限額防禦**功能。
+## 🏗️ 2. 核心架構變更與技術細節
 
-### 核心運作邏輯：
-1.  **Windows 觸發層**: 在 Windows 工作排程器中僅建立一個每 1 分鐘觸發一次的核心骨架，呼叫 `dispatcher_dual.py`。
-2.  **調度器快閃層 (`dispatcher_dual.py`)**: 
-    *   利用 MySQL 內建的 `GET_LOCK()` 確保全系統同一分鐘只有一個調度器在動。
-    *   **雙軌分流判斷**：檢查目前正在後台跑的「大任務 (Heavy Task)」數量。若大任務額度已滿，則 SQL 動態過濾，**這輪只撈取小任務，大任務留在 DB 排隊**。
-    *   **非阻塞派發 (Non-blocking)**：撈出 due 任務後，一律使用 `subprocess.Popen` 啟動萬能外殼 `wrapper.py`。**在 0.01 秒內立即推進該任務在 DB 的 `next_run_at` 時間**，隨後調度器立即退出並完全釋放記憶體，絕不留戀背景。
-3.  **萬能外殼防線 (`wrapper.py`)**:
-    *   由調度器派發，在背景獨立行程運作，內部以**阻塞 (Blocking)** 方式執行真正的幾百個子任務 Python 檔（保護 8GB RAM 的執行總量）。
-    *   子任務執行完畢後（無論成功、失敗或崩潰），由 `wrapper.py` 負責連回 MySQL，更新狀態、清空鎖（Lock），並寫入詳細的歷史日誌表。
+1.  **環境變數/設定檔（主機簡寫識別）**:
+    *   放棄使用 `socket.gethostname()` 抓取系統全名。
+    *   在每台主機的 `Run_Schedule.py` 同級目錄下，允許建立一個簡單的 `config.py` 設定檔，或者在程式碼頂端定義一個變數：`CURRENT_HOST = "Host-A"` (簡寫)。
+    *   程式執行時，一律以此自訂的簡寫去 MySQL 進行過濾（`WHERE LOWER(s.executor_host) = LOWER(CURRENT_HOST)`）。這樣 `Run_Schedule.py` 在代碼層面依然通用，換主機時只需要改這個簡寫變數即可。
+
+2.  **多虛擬環境 (venv) 動態指定**:
+    *   在前端 CRUD 新增 Task 的 Modal 中，**增加一個必填欄位：【Python 直譯器路徑】**。
+    *   管理員必須指定該小程式專屬的 venv 路徑（例如：`D:\Python_ENV\ProjectA\Scripts\python.exe`）。
+    *   調度器 `Run_Schedule.py` 撈出任務後，會動態將此路徑傳給 `wrapper.py`，由 `wrapper.py` 使用該指定的特定虛擬環境去執行子任務，達成多環境隔離。
+
+3.  **單一工作排程器防線**: A、B、C 各台主機的 Windows 工作排程器中，**永遠只建立一個**每 5 分鐘（或 1 分鐘）觸發一次的骨架，呼叫通用調度器 `Run_Schedule.py`。
+
+4.  **大/小任務雙軌分流防禦 (保護 8GB RAM)**: 同時間單台主機「快車道（小任務）」最大併發數為 2；「慢車道（大任務，逾時 > 600秒）」最大併發數限制為 1。若慢車道滿載，當輪自動忽略大任務，優先放行小任務。
+
+5.  **非阻塞派發 (Non-blocking)**: 調度器一律使用 `subprocess.Popen` 啟動 `wrapper.py`。**在 0.01 秒內立即推進該任務在 DB 的 `next_run_at` 時間**，隨後調度器立即退出並完全釋放記憶體。
 
 ---
 
-## 🗄️ 3. 資料庫結構設計 (Database Schema)
-排程控制與歷史日誌完全資料庫化。請依據以下兩張位於 `log_record` 資料庫的資料表欄位邏輯進行代碼編寫：
+## 🗄️ 3. 資料庫設計 (One-to-Many 正規化結構)
 
-### 表 A：任務狀態設定表 (`loader_schedule` 與 `loader_schedule_state`)
-*   `schedule_id` (INT, PK)
-*   `task_id` (INT)
-*   `schedule_name` (VARCHAR)
-*   `schedule_type` (VARCHAR): `interval` (5min, 10min), `daily`, `weekly`, `custom`。
-*   `timeout_seconds` (INT): 判斷任務大小的依據。預設 `> 600` 秒（10分鐘以上）即定義為**慢車道大任務**。
-*   `priority` (INT): 數值越小優先度越高（`ORDER BY priority ASC`）。
-*   `next_run_at` (DATETIME): 靈魂欄位。下一次執行的精確時間。
-*   `last_status` (VARCHAR): `RUNNING`, `SUCCESS`, `FAIL`, `SKIP`。
-*   `lock_owner` (VARCHAR): 格式為 `HostName:PID`。
-*   `lock_until` (DATETIME): 鎖定截止時間。
+### 表 1：任務主表 (`loader_task`) -> 儲存實體檔案與虛擬環境資訊
+*   `id` (INT, PK, AI)
+*   `project_name` (VARCHAR) : 專案名稱
+*   `task_name` (VARCHAR) : 任務描述/名稱
+*   `file_path` (VARCHAR) : Python 小程式存放的主機檔案路徑
+*   `file_name` (VARCHAR) : Python 小程式的名稱
+*   `python_executable` (VARCHAR(500)) : **[新欄位] 該任務指定的 Python 虛擬環境 (venv) 直譯器絕對路徑**
+*   `is_active` (CHAR(1)) : 總開關 ('Y'/'N')
 
-### 表 B：歷史執行日誌表 (`loader_execution_log`)
+### 表 2：時間排程表 (`loader_schedule`) -> 儲存時間與執行主機規則
+*   `id` (INT, PK, AI)
+*   `task_id` (INT, FK -> loader_task.id)
+*   `schedule_name` (VARCHAR) : 排程說明
+*   `schedule_type` (VARCHAR) : `interval`, `daily`, `weekly`, `custom`
+*   `interval_minutes` (INT, NULL) 
+*   `daily_time` (TIME, NULL)
+*   `weekly_days` (VARCHAR, NULL)
+*   `executor_host` (VARCHAR) : **指定執行的主機簡寫名稱 (例如: Host-A, Host-B, Host-C)**
+*   `priority` (INT) : 優先度，數字越小越先跑
+*   `timeout_seconds` (INT) : 逾時時間 (大於 600 秒會被調度器判定為慢車道大任務)
+*   `allow_overlap` (CHAR(1)) : 是否允許重疊 ('Y'/'N')
+*   `is_active` (CHAR(1)) : 排程分段開關 ('Y'/'N')
+
+### 表 3：動態狀態鎖定表 (`loader_schedule_state`) -> 與表 2 一對一
+*   `schedule_id` (INT, PK, FK -> loader_schedule.id)
+*   `next_run_at` (DATETIME, INDEX) : 下一次執行的精確時間
+*   `last_run_at` (DATETIME) / `last_success_at` (DATETIME)
+*   `last_status` (VARCHAR) : `RUNNING`, `SUCCESS`, `FAIL`, `SKIP`
+*   `last_message` (VARCHAR(1000))
+*   `lock_owner` (VARCHAR) : `HostName:PID`
+*   `lock_until` (DATETIME) : 鎖定截止時間
+
+### 表 4：歷史執行日誌表 (`loader_execution_log`) -> 監控 DashBoard 數據源
 *   儲存每次排程派發後的 `start_time`、`end_time`、`duration_seconds`、`exit_code`、`message` 及 `output_excerpt` (前 4000 字的 stdout/stderr 摘要)。
 
 ---
 
-## 🛠️ 4. 程式碼實作與重構任務 (Copilot Task List)
-請幫我產出/優化以下兩支關鍵程式碼。程式碼中必須包含完整、繁體中文的關鍵註解：
+## 🛠️ 4. 程式碼實作任務 (Copilot Task List)
 
-### 任務一：撰寫萬能外殼腳本 `wrapper.py`
-*   **需求**：接收調度器傳入的參數。使用 `subprocess.run` 阻塞執行真正的子任務 Python 檔。
-*   **核心安全機制**：必須使用 `try...except...finally` 語法包裹。不論子任務是順利執行、非零退出、或是中途丟出異常當機，`finally` 區塊內都**必須絕對保證**連回 MySQL，將該 `schedule_id` 的 `lock_owner` 與 `lock_until` 清空為 `NULL`，並推進狀態，避免排程永久死鎖。
+請幫我產出以下兩支關鍵程式碼，並包含完整、繁體中文的關鍵註解：
 
-### 任務二：重構調度主程式 `dispatcher_dual.py`
-*   **需求**：重構我的單次 Batch 調度器，將原本會卡死大任務的 `subprocess.run` 移除。
-*   **雙軌動態分流設計**：
-    1. 進入 `while True` 前，先下 SQL 查詢：統計目前 `last_status='RUNNING'` 且 `timeout_seconds > 600` 且 `lock_until > NOW()` 的任務數量。
-    2. 如果數量 `>= 1`（慢車道滿載），則動態在撈取 due 任務的 SQL 語句中注入 `AND s.timeout_seconds <= 600` 過濾條件，**強制只讓快車道小任務通行**。
-    3. 撈出任務後，立刻計算下次時間 `compute_next_run_at` 並更新 `next_run_at` 進 DB（防止下一分鐘的調度器重複撈取）。
-    4. 使用 `subprocess.Popen` 異步啟動 `wrapper.py`，調度器隨即不留戀地進入下一次循環或直接退出。
+### 任務一：萬能外殼腳本 `wrapper.py`
+*   **需求**：接收調度器傳入的參數。
+*   **核心變更**：必須接收從調度器傳過來的 `python_executable`（該任務專屬的 venv 路徑）以及 `script_path`。
+*   **執行機制**：使用 `subprocess.run` 阻塞執行，格式為 `[傳入的python_executable, script_path]`。
+*   **安全防禦**：必須使用 `try...except...finally` 包裹。不論任務成功或崩潰，`finally` 內必須絕對保證連回 MySQL，將該 `schedule_id` 的 `lock_owner` 與 `lock_until` 清空為 `NULL`，更新狀態並寫入 `loader_execution_log`。
+
+### 任務二：通用調度主程式 `Run_Schedule.py`
+*   **需求**：撰寫單次 Batch 調度器，每 5 分鐘（或 1 分鐘）被 Windows 補抓觸發一次。
+*   **核心邏輯**：
+    1. 在程式碼最上方（或透過導入 `config`）提供一個可供修改的簡寫變數，例如 `CURRENT_HOST = "Host-A"`。
+    2. 使用 `GET_LOCK()` 實現主機防重複執行鎖（鎖名可結合 `CURRENT_HOST`）。
+    3. 查詢 `loader_schedule_state` 統計當前主機簡寫下正在跑且未超時的大任務（`timeout_seconds > 600`）數量。若 `>= 1`，則本輪 SQL 撈取時自動加上 `AND s.timeout_seconds <= 600` 進行過濾（大任務限額排隊）。
+    4. 透過 `INNER JOIN` 連接 `loader_task`、`loader_schedule` 與 `loader_schedule_state`。撈出目前屬於本機簡寫（`LOWER(s.executor_host) = LOWER(CURRENT_HOST)`）且 `ss.next_run_at <= NOW()` 的任務。
+    5. 撈出後，立刻計算下次時間 `compute_next_run_at` 並更新 `next_run_at` 進 DB（防止重複撈取）。
+    6. 提取該任務在資料庫中設定的 `t.python_executable`（特定 venv 檔案路徑），並使用 `subprocess.Popen` 異步啟動 `wrapper.py`。將指定的 venv 路徑作為參數傳給 `wrapper.py`。
+    7. 調度器不阻塞，立刻進入下一次 `while True` 循環直到任務清空後完全退出。
 
 ---
 
 ## 🎯 請 Copilot 開始執行
-請仔細閱讀上述所有計劃與限制。如果完全理解，請先為我產出 **「任務一：萬能外殼腳本 `wrapper.py`」** 的完整程式碼，隨後再產出 **「任務二：重構調度主程式 `dispatcher_dual.py`」**。
+請仔細閱讀上述所有修訂後的計劃與限制。如果完全理解，請先為我產出 **「任務一：萬能外殼腳本 `wrapper.py`」** 的完整程式碼，隨後再產出 **「任務二：通用調度主程式 `Run_Schedule.py`」**。
