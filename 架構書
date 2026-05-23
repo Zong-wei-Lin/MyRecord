@@ -61,3 +61,8 @@
     *   計算開始時間，使用 `subprocess.run` 執行子任務，捕捉 `returncode`。若拋出異常，狀態標記為 `FAIL` 並記錄錯誤文字。
     *   計算結束時間與耗時。**隨後開啟獨立 DB 連線**，將下一次執行時間更新回 `loader_schedule.next_run_at`，並將所有執行數據（包含 error_message）`INSERT` 寫入 `loader_execution_log`。
 5.  確保所有排隊任務消化完畢後，調度器才完整釋放退出。
+
+---
+
+## ⚙️ 5. 程式碼編寫風格範本 (Code Style Reference)
+為了保持專案結構的一致性，請務必嚴格參照我現有的程式碼撰寫風格、命名邏輯、以及資料庫封裝習慣來產出全新的代碼。
