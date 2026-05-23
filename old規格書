@@ -1,0 +1,36 @@
+我要從頭開始打造一個系統，包含MySQL資料庫、FastAPI、Classic ASP我都要是新。
+
+我先列出我目前需求與現制
+有哪邊是你需要再確認清楚的，請先跟我說讓我檢查有沒有問題，不允許直接改動程式碼
+
+這些資料夾是我現在的專案架構供你參考
+database放的是SQL表的架構
+app/services/MonitotLoaders是我python venv的FastAPI
+Loader_Monitor是我的Class ASP前端
+Loader_project/ 05-single-dispatcher-first-batch-spec.md是我上一版本的，但跟我想像中有所差異
+
+使用背景與需求
+Server OS:Windows 2008 R2
+MySQL 5.5.8
+Python 3.7
+
+前端需求：
+1.	Web主要放在ml350gen8這台Server，這是一個前端頁面可以做CRUD排程，並且可以有監控每個排程是否有執行，執行結果是什麼的DashBoard
+2.	每個CRUD會輸入的資訊有以下(跟現在前端的”新增Task”這一個Btn按下去跳出來的Modal所需資料一模一樣)
+	主機=>Python小程式存放的主機位置
+	檔案路徑=>Python小程式存放的主機檔案路徑
+	檔案名稱=>Python小程式的名稱
+	專案名稱
+	任務描述
+	Task 啟用=>是否啟用
+	逾時=>判斷超過時間沒有執行，在前端監控頁面顯示用
+
+後端需求：
+1.	FastAPI是放在ml350gen8這台Server
+
+主要排程檔案需求：
+1.	但是會有其他台例如A、B、C三台以上的主機可以吃在Web輸入的排程資料。
+2.	每一台主機我想要只有一個工作排程器去執行就好，設定一個每5分鐘會觸發的工作排程器，此工作排程器只會跑一個Python檔案(Run_Schedule.py)，此Python檔可以讀取Web建立好的排程MySQL資料庫，進而判斷這個時間段該跑哪一些Python小程式(會有限制A主機只會跑在CRUD新增好在A主機的檔案，不會有兩台主機跑同一個Task的狀況)
+3.	
+4.	Run_Schedule.py要能在A寫完，直接搬去B、C不用改太多就能直接使用(套件除外)。
+
